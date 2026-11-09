@@ -604,11 +604,13 @@ void Assistant::working_proc()
 
             bool ret = false;
             TaskExceptionKind exception_kind = TaskExceptionKind::None;
+#if defined(__APPLE__) && ASST_WITH_MAC_NATIVE
             const bool mac_native = m_ctrler->get_controller_type() == ControllerType::MacNative;
             MatcherConfig::set_thread_threshold_scale(mac_native ? 0.9 : 1.0);
             if (mac_native) {
                 LogDebug << "MacNative template threshold scale" << 0.9;
             }
+#endif
             try {
                 ret = task_ptr->run();
             }
