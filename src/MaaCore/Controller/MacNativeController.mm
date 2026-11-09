@@ -26,11 +26,6 @@
 
 #include "SwipeHelper.hpp"
 #include "Utils/Logger.hpp"
-#ifdef ASST_DEBUG
-#include "Utils/DebugImageHelper.hpp"
-#include "Utils/Platform.hpp"
-#include "Utils/WorkingDir.hpp"
-#endif
 
 namespace MacNativeDetail {
 struct NativeFrame {
@@ -204,53 +199,6 @@ int detect_title_bar_height(const cv::Mat& image)
     return 0;
 }
 
-#ifdef ASST_DEBUG
-void prune_mac_native_images(const std::filesystem::path& directory)
-{
-    constexpr size_t MaxRawImages = 4000;
-    static std::mutex prune_mutex;
-    std::scoped_lock lock(prune_mutex);
-    using ImageFile = std::pair<std::filesystem::file_time_type, std::filesystem::path>;
-    std::vector<ImageFile> raw_images;
-    std::error_code error;
-    std::filesystem::directory_iterator iter(directory, std::filesystem::directory_options::skip_permission_denied, error);
-    if (error) {
-        LogWarn << "Cannot inspect MacNative screenshot directory" << directory << error.message();
-        return;
-    }
-    for (const std::filesystem::directory_iterator end; iter != end; iter.increment(error)) {
-        if (error) {
-            LogWarn << "Cannot iterate MacNative screenshots" << directory << error.message();
-            break;
-        }
-        const auto& path = iter->path();
-        if ((path.extension() != ".png" && path.extension() != ".jpg")
-            || !iter->is_regular_file(error)) {
-            error.clear();
-            continue;
-        }
-        const auto time = std::filesystem::last_write_time(path, error);
-        if (error) {
-            LogWarn << "Cannot inspect MacNative screenshot" << path << error.message();
-            error.clear();
-            continue;
-        }
-        raw_images.emplace_back(time, path);
-    }
-    std::sort(raw_images.begin(), raw_images.end(), [](const ImageFile& lhs, const ImageFile& rhs) {
-        return lhs.first == rhs.first ? lhs.second < rhs.second : lhs.first < rhs.first;
-    });
-    const size_t excess = raw_images.size() > MaxRawImages ? raw_images.size() - MaxRawImages : 0;
-    for (size_t i = 0; i < excess; ++i) {
-        std::filesystem::remove(raw_images[i].second, error);
-        if (error) {
-            LogWarn << "Cannot remove old MacNative screenshot" << raw_images[i].second << error.message();
-            error.clear();
-        }
-    }
-}
-#endif
-
 bool capture_frame(std::string_view bundle_id, cv::Mat& bgr, NativeFrame& frame)
 {
     if (!CGPreflightScreenCaptureAccess()) {
@@ -301,11 +249,6 @@ bool capture_frame(std::string_view bundle_id, cv::Mat& bgr, NativeFrame& frame)
         cv::cvtColor(bgra, bgr, cv::COLOR_BGRA2BGR);
         frame = result->frame;
 
-#ifdef ASST_DEBUG
-        static std::atomic_uint64_t capture_sequence = 0;
-        const auto capture_id = capture_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-#endif
-
         const int title_bar_height = detect_title_bar_height(bgr);
         const cv::Rect content { 0, title_bar_height, bgr.cols, bgr.rows - title_bar_height };
         if (content.width <= 0 || content.height <= 0) {
@@ -352,22 +295,6 @@ bool capture_frame(std::string_view bundle_id, cv::Mat& bgr, NativeFrame& frame)
             cv::INTER_AREA);
         scaled.copyTo(normalized(cv::Rect(frame.content_x, frame.content_y, frame.content_width, frame.content_height)));
         bgr = std::move(normalized);
-#ifdef ASST_DEBUG
-        const auto debug_dir = asst::utils::path("debug") / asst::utils::path("MacNative");
-        if (!asst::utils::save_debug_image(bgr, debug_dir, false, "", "normalized_" + std::to_string(capture_id), "png")) {
-            LogWarn << "Failed to save the MacNative normalized screenshot" << capture_id;
-        }
-        prune_mac_native_images(asst::UserDir.get() / debug_dir);
-        LogDebug << "MacNative capture" << capture_id
-                 << "window" << frame.window_id << "origin" << frame.x << frame.y
-                 << "window size" << frame.width << frame.height
-                 << "requested size" << result->requested_width << result->requested_height
-                 << "raw size" << width << height
-                 << "content rect" << content.x << content.y << content.width << content.height
-                 << "normalized content rect" << frame.content_x << frame.content_y << frame.content_width << frame.content_height
-                 << "capture offset" << frame.capture_offset_x << frame.capture_offset_y
-                 << "capture size" << frame.capture_width << frame.capture_height;
-#endif
         return true;
     }
     LogError << "MacNative capture requires macOS 14 or later.";
